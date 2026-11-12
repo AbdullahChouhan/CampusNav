@@ -1,0 +1,10 @@
+building: "F"
+floor: "F3"
+
+locations:
+  - f_f3_west_corridor
+  - f_f3_east_corridor
+  - f_f3_south_junction
+  - f_f3_north_junction
+  - f_f3_south_stairwell
+  - f_f3_north_stairwell

@@ -1,0 +1,110 @@
+stages:
+  extract_frames:
+    cmd: python src/data/extract_frames.py
+    deps:
+      - src/data/extract_frames.py
+      - data/annotations/video_intervals.csv
+      - configs/locations.yaml
+    params:
+      - data.frame_interval_sec
+      - data.image_size
+      - data.jpeg_quality
+    outs:
+      - data/processed/frames
+      - data/processed/dataset_manifest.csv
+
+  validate_data:
+    cmd: python src/data/validate_data.py
+    deps:
+      - src/data/validate_data.py
+      - data/processed/dataset_manifest.csv
+      - configs/locations.yaml
+    params:
+      - data.min_recordings_per_class
+    outs:
+      - reports/metrics/validation_report.json
+
+  split_data:
+    cmd: python src/data/split_data.py
+    deps:
+      - src/data/split_data.py
+      - data/processed/dataset_manifest.csv
+      - reports/metrics/validation_report.json
+    params:
+      - seed
+      - data.train_ratio
+      - data.val_ratio
+      - data.test_ratio
+    outs:
+      - data/splits/train.csv
+      - data/splits/val.csv
+      - data/splits/test.csv
+
+  train_baseline:
+    cmd: python src/models/train_svm.py
+    deps:
+      - src/models/train_svm.py
+      - src/tracking/mlflow_utils.py
+      - data/splits/train.csv
+      - data/splits/val.csv
+    params:
+      - seed
+      - baseline_svm
+      - mlflow.experiment_name
+    outs:
+      - models/svm_baseline.joblib
+
+  train_main:
+    cmd: python src/models/train_resnet.py
+    deps:
+      - src/models/train_resnet.py
+      - src/tracking/mlflow_utils.py
+      - data/splits/train.csv
+      - data/splits/val.csv
+    params:
+      - seed
+      - data.image_size
+      - main_resnet
+      - mlflow.experiment_name
+    outs:
+      - models/resnet18_main.pth
+
+  evaluate_baseline:
+    cmd: python src/evaluation/evaluate.py --model baseline
+    deps:
+      - src/evaluation/evaluate.py
+      - src/tracking/mlflow_utils.py
+      - models/svm_baseline.joblib
+      - data/splits/test.csv
+    params:
+      - baseline_svm
+    metrics:
+      - reports/metrics/baseline_metrics.json:
+          cache: false
+    outs:
+      - reports/figures/baseline_confusion_matrix.png
+
+  evaluate_main:
+    cmd: python src/evaluation/evaluate.py --model main
+    deps:
+      - src/evaluation/evaluate.py
+      - src/tracking/mlflow_utils.py
+      - models/resnet18_main.pth
+      - data/splits/test.csv
+    params:
+      - data.image_size
+    metrics:
+      - reports/metrics/main_metrics.json:
+          cache: false
+    outs:
+      - reports/figures/main_confusion_matrix.png
+
+  register_model:
+    cmd: python src/tracking/register_model.py
+    deps:
+      - src/tracking/register_model.py
+      - src/tracking/mlflow_utils.py
+      - models/resnet18_main.pth
+      - reports/metrics/main_metrics.json
+    params:
+      - mlflow

@@ -1,0 +1,40 @@
+# Global pipeline parameters
+seed: 42
+
+data:
+  annotations_csv: data/annotations/video_intervals.csv
+  raw_videos_dir: data/raw_videos
+  frames_dir: data/processed/frames
+  manifest_csv: data/processed/dataset_manifest.csv
+  splits_dir: data/splits
+  frame_interval_sec: 2.0
+  image_size: [224, 224]
+  jpeg_quality: 90
+  train_ratio: 0.60
+  val_ratio: 0.20
+  test_ratio: 0.20
+  min_recordings_per_class: 3
+
+baseline_svm:
+  hog_resize: [128, 128]
+  hog_orientations: 9
+  hog_pixels_per_cell: [16, 16]
+  hog_cells_per_block: [2, 2]
+  svm_c: 1.0
+  svm_kernel: rbf
+
+main_resnet:
+  architecture: resnet18
+  pretrained: true
+  freeze_backbone: true
+  batch_size: 32
+  learning_rate: 0.001
+  epochs: 10
+  num_workers: 2
+
+mlflow:
+  experiment_name: CampusNav-Indoor-Localization
+  registered_model_name: CampusNav-ResNet18
+  register_model: false
+  min_f1_to_register: 0.70
+  target_stage: Staging
