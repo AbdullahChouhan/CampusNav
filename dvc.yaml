@@ -9,6 +9,7 @@ stages:
       - data.frame_interval_sec
       - data.image_size
       - data.jpeg_quality
+      - data.blur_faces
     outs:
       - data/processed/frames
       - data/processed/dataset_manifest.csv

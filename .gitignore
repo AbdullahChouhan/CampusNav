@@ -34,9 +34,12 @@ Thumbs.db
 .idea/
 
 # Raw/processed media & model weights (tracked via DVC, not Git)
-data/raw_videos/*.mp4
-data/raw_videos/*.mov
-data/raw_videos/*.avi
+data/raw_videos/**/*.mp4
+data/raw_videos/**/*.MP4
+data/raw_videos/**/*.mov
+data/raw_videos/**/*.MOV
+data/raw_videos/**/*.avi
+data/raw_videos/**/*.mkv
 data/processed/frames/
 models/*.pth
 models/*.pkl

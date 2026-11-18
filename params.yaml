@@ -10,6 +10,7 @@ data:
   frame_interval_sec: 2.0
   image_size: [224, 224]
   jpeg_quality: 90
+  blur_faces: true
   train_ratio: 0.60
   val_ratio: 0.20
   test_ratio: 0.20

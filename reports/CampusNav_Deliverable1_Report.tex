@@ -1,0 +1,200 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[margin=0.72in]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{parskip}
+\sloppy
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    pdftitle={CampusNav: Reproducible Computer Vision Pipeline for Indoor Location Recognition},
+    pdfauthor={Abdullah Chouhan et al.}
+}
+
+\title{\textbf{CampusNav: Reproducible Computer Vision Pipeline for Indoor Location Recognition}\\[0.4em]
+\large MLOps Deliverable 1 — System Architecture \& Implementation Report}
+\author{Abdullah Chouhan \quad (Repository Owner: \texttt{AbdullahChouhan})}
+\date{November 2026}
+
+\begin{document}
+
+\maketitle
+
+\vspace{-1em}
+\begin{center}
+\begin{tabular}{rl}
+\toprule
+\textbf{Resource} & \textbf{URL} \\
+\midrule
+\textbf{GitHub Repository} & \url{https://github.com/AbdullahChouhan/CampusNav} \\
+\textbf{DagsHub Workspace} & \url{https://dagshub.com/AbdullahChouhan/CampusNav} \\
+\textbf{MLflow Tracking URI} & \url{https://dagshub.com/AbdullahChouhan/CampusNav.mlflow} \\
+\textbf{DVC Remote Endpoint} & \url{https://dagshub.com/AbdullahChouhan/CampusNav.dvc} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Project Overview and Scope}
+\textbf{CampusNav} is an AI-assisted indoor navigation system designed to localize users inside university buildings from hallway imagery and guide them between destinations. Rather than relying on computationally heavy 3D reconstruction, the system decouples indoor navigation into two modular components:
+\begin{enumerate}
+    \item \textbf{Visual Global Localization:} A computer vision pipeline that classifies an input camera frame into a distinct topological building zone or landmark.
+    \item \textbf{Topological Route Finding:} A graph-based shortest-path engine that maps zones and room offsets across corridors.
+\end{enumerate}
+
+For Deliverable 1, the implementation establishes the end-to-end reproducible MLOps pipeline for \textbf{indoor location recognition} on \textbf{Building F, Floor 3 (F3)}.
+
+\subsection{Hierarchical Location Taxonomy}
+To ensure forward compatibility across multiple floors and buildings without refactoring schemas in later phases, location labels follow a strict hierarchical naming convention (\texttt{<building>\_<floor>\_<zone>}), defined in \texttt{configs/locations.yaml}:
+\begin{itemize}
+    \item \texttt{f\_f3\_west\_corridor} --- West wing classroom corridor on Floor 3.
+    \item \texttt{f\_f3\_east\_corridor} --- East wing classroom corridor on Floor 3.
+    \item \texttt{f\_f3\_south\_junction} --- Southern connecting crossway and lobby junction.
+    \item \texttt{f\_f3\_north\_junction} --- Northern connecting crossway and lobby junction.
+    \item \texttt{f\_f3\_south\_stairwell} --- Southern stairwell landing and vertical access point.
+    \item \texttt{f\_f3\_north\_stairwell} --- Northern stairwell landing and vertical access point.
+\end{itemize}
+This convention also enables hierarchical evaluation (separating building/floor accuracy from fine-grained zone accuracy) and directly maps to graph node identifiers.
+
+\section{Repository Architecture and MLOps Hygiene}
+The project enforces a strict separation between source code, configuration, credentials, and large binary artifacts:
+\noindent\begin{minipage}{\textwidth}
+\small
+\begin{verbatim}
+CampusNav/
+|-- configs/locations.yaml       # Target building, floor, and canonical class list
+|-- params.yaml                  # Centralized pipeline & model hyperparameters
+|-- dvc.yaml                     # Multi-stage reproducible DVC pipeline definition
+|-- requirements.txt             # Pinned Python dependencies
+|-- .env.example                 # Template for DagsHub and MLflow environment variables
+|-- data/
+|   |-- raw_videos/              # Raw hallway recordings (tracked via DVC)
+|   |-- annotations/             # Timestamp interval annotations (video_intervals.csv)
+|   |-- processed/               # Extracted 224x224 JPEG frames & dataset_manifest.csv
+|   `-- splits/                  # Leak-free train.csv, val.csv, and test.csv splits
+|-- src/
+|   |-- data/                    # extract_frames.py, validate_data.py, split_data.py
+|   |-- models/                  # train_svm.py (Baseline) & train_resnet.py (Main)
+|   |-- evaluation/              # evaluate.py (Metrics JSON & confusion matrix plots)
+|   `-- tracking/                # mlflow_utils.py & register_model.py
+|-- models/                      # Serialized checkpoints (tracked via DVC)
+|-- reports/                     # Evaluation metrics and generated figures
+`-- tests/                       # Automated pytest suite for configs, models, and DAG
+\end{verbatim}
+\end{minipage}
+
+\textbf{Credential and Artifact Isolation:} The \texttt{.gitignore} configuration explicitly excludes \texttt{.env}, \texttt{.dvc/config.local}, virtual environments (\texttt{.venv/}), local MLflow runs (\texttt{mlruns/}), raw video files (\texttt{*.mp4}), extracted frame directories, and model weights (\texttt{*.pth}, \texttt{*.joblib}). DVC remote authentication is configured locally via \texttt{dvc remote modify --local} and backed by DagsHub storage linked to Hugging Face S3.
+
+\section{Data Engineering and Leak-Free Splitting Workflow}
+
+\subsection{Interval Annotation and Frame Extraction (\texttt{src/data/extract\_frames.py})}
+Because a single corridor walkthrough video traverses multiple zones, assigning a single label to an entire video file would introduce severe label noise. Instead, videos are annotated using timestamp intervals in \texttt{data/annotations/video\_intervals.csv} (\texttt{video\_file, start\_time, end\_time, location\_label}) with 3--5 second guard bands at doorway transitions to exclude motion blur and ambiguous boundary frames.
+
+The extraction stage reads \texttt{params.yaml}, opens each video via OpenCV (\texttt{cv2.VideoCapture}), samples frames every \texttt{frame\_interval\_sec: 2.0} seconds within valid annotated intervals, downscales frames immediately to $224 \times 224$ JPEG (\texttt{jpeg\_quality: 90}) to keep DVC remote transfers lightweight, and outputs \texttt{data/processed/dataset\_manifest.csv}:
+\begin{verbatim}
+image_path,location_label,recording_id,timestamp_sec
+data/processed/frames/sweep_01/frame_0000.jpg,f_f3_west_corridor,sweep_01,0.0
+data/processed/frames/sweep_01/frame_0002.jpg,f_f3_west_corridor,sweep_01,2.0
+\end{verbatim}
+
+\subsection{Automated Data Validation (\texttt{src/data/validate\_data.py})}
+Before any splitting or model training occurs, the validation stage verifies dataset integrity and writes a structured audit to \texttt{reports/metrics/validation\_report.json}:
+\begin{enumerate}
+    \item \textbf{Schema \& Null Check:} Ensures no missing values exist across \texttt{image\_path}, \texttt{location\_label}, or \texttt{recording\_id}.
+    \item \textbf{Canonical Label Verification:} Asserts that every label belongs to the approved set in \texttt{configs/locations.yaml}.
+    \item \textbf{Image Integrity \& Corruption Check:} Opens and verifies every extracted JPEG using \texttt{PIL.Image.verify()}.
+    \item \textbf{Duplicate Detection:} Computes MD5 file digests across all frames to flag duplicate images.
+    \item \textbf{Recording Coverage Check:} Verifies that each location class appears across at least \texttt{min\_recordings\_per\_class} independent recordings.
+\end{enumerate}
+
+\subsection{Preventing Data Leakage via Group Splitting (\texttt{src/data/split\_data.py})}
+Consecutive frames extracted from the same video share nearly identical lighting, camera angles, and background artifacts. Randomly splitting individual frames across train, validation, and test sets causes severe data leakage and artificially inflates test accuracy.
+
+To prevent this, \texttt{split\_data.py} uses 5-fold \texttt{StratifiedGroupKFold} from \texttt{scikit-learn}, grouping strictly by \texttt{recording\_id} and stratifying by \texttt{location\_label} (allocating 3 folds / 60\% to train, 1 fold / 20\% to validation, and 1 fold / 20\% to test). Explicit set-disjointness assertions verify that no \texttt{recording\_id} is shared between any two splits:
+\begin{verbatim}
+assert set(train_df["recording_id"]).isdisjoint(set(val_df["recording_id"]))
+assert set(train_df["recording_id"]).isdisjoint(set(test_df["recording_id"]))
+assert set(val_df["recording_id"]).isdisjoint(set(test_df["recording_id"]))
+\end{verbatim}
+
+\section{Machine Learning Models and Evaluation}
+Both models are trained and evaluated on the exact same \texttt{train.csv}, \texttt{val.csv}, and \texttt{test.csv} splits.
+
+\subsection{Baseline Model: HOG + SVM (\texttt{src/models/train\_svm.py})}
+The traditional computer vision baseline converts images to grayscale, resizes them to $128 \times 128$, and extracts Histogram of Oriented Gradients (HOG) descriptors (\texttt{orientations: 9}, \texttt{pixels\_per\_cell: [16, 16]}, \texttt{cells\_per\_block: [2, 2]}). Features are standardized via \texttt{StandardScaler} and classified using a Support Vector Machine (\texttt{SVC} with RBF kernel, $C = 1.0$, and probability calibration). The fitted pipeline and \texttt{LabelEncoder} are saved to \texttt{models/svm\_baseline.joblib}.
+
+\subsection{Main Model: Fine-Tuned ResNet-18 (\texttt{src/models/train\_resnet.py})}
+The primary deep learning model uses a pretrained \textbf{ResNet-18} (\texttt{ResNet18\_Weights.DEFAULT}) implemented in PyTorch:
+\begin{itemize}
+    \item \textbf{Preprocessing \& Augmentation:} Training frames undergo $224 \times 224$ resizing, random horizontal flipping ($p=0.3$), brightness/contrast color jitter ($0.2$), and ImageNet normalization.
+    \item \textbf{Transfer Learning Architecture:} Early convolutional layers are frozen (\texttt{freeze\_backbone: true}) to prevent overfitting and enable fast training across CPU/GPU environments, while the final fully connected layer (\texttt{model.fc}) is replaced with a 6-output linear head.
+    \item \textbf{Optimization \& Checkpointing:} Trained with Cross-Entropy loss and Adam ($\mathrm{lr}=10^{-3}$, batch size $32$, $10$ epochs). The checkpoint achieving the highest validation Macro F1-score is saved to \texttt{models/resnet18\_main.pth} alongside the \texttt{class\_to\_idx} mapping.
+\end{itemize}
+
+\subsection{Decoupled Evaluation Stage (\texttt{src/evaluation/evaluate.py})}
+Evaluation is decoupled for the baseline and main models so each branch can be iterated independently. For each model, \texttt{evaluate.py} computes test \textbf{Accuracy}, \textbf{Macro Precision}, \textbf{Macro Recall}, \textbf{Macro F1-score}, and per-class classification reports (\texttt{reports/metrics/<model>\_metrics.json}), and renders a labeled confusion matrix heatmap (\texttt{reports/figures/<model>\_confusion\_matrix.png}).
+
+\section{DVC Pipeline and MLflow Tracking Integration}
+
+\subsection{DVC Pipeline Structure (\texttt{dvc.yaml} \& \texttt{dvc dag})}
+The entire workflow is parameterized via \texttt{params.yaml} and orchestrated through \texttt{dvc.yaml}. Running \texttt{dvc repro} executes all eight stages deterministically. Figure 1 shows the pipeline dependency structure produced by \texttt{dvc dag}:
+
+\noindent\begin{minipage}{\textwidth}
+\small
+\begin{verbatim}
+                                 +----------------+
+                                 | extract_frames |
+                                 +----------------+
+                                          |
+                                 +---------------+
+                                 | validate_data |
+                                 +---------------+
+                                          |
+                                   +------------+
+                             ******| split_data |******
+                       ******      +------------+      ******
+                 ******                                      ******
+        +----------------+                                  +------------+
+        | train_baseline |                                  | train_main |
+        +----------------+                                  +------------+
+                 |                                                 |
+       +-------------------+                              +---------------+
+       | evaluate_baseline |                              | evaluate_main |
+       +-------------------+                              +---------------+
+                                                                   |
+                                                          +----------------+
+                                                          | register_model |
+                                                          +----------------+
+\end{verbatim}
+\end{minipage}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{llp{4.6cm}p{4.4cm}}
+\toprule
+\textbf{Stage Name} & \textbf{Script} & \textbf{Key Dependencies} & \textbf{Outputs / Metrics} \\
+\midrule
+\texttt{extract\_frames} & \texttt{src/data/extract\_frames.py} & \texttt{video\_intervals.csv}, \texttt{locations.yaml} & \texttt{data/processed/frames}, \texttt{dataset\_manifest.csv} \\
+\texttt{validate\_data} & \texttt{src/data/validate\_data.py} & \texttt{dataset\_manifest.csv}, \texttt{locations.yaml} & \texttt{validation\_report.json} \\
+\texttt{split\_data} & \texttt{src/data/split\_data.py} & \texttt{dataset\_manifest.csv}, \texttt{validation\_report.json} & \texttt{train.csv}, \texttt{val.csv}, \texttt{test.csv} \\
+\texttt{train\_baseline} & \texttt{src/models/train\_svm.py} & \texttt{train.csv}, \texttt{val.csv} & \texttt{models/svm\_baseline.joblib} \\
+\texttt{train\_main} & \texttt{src/models/train\_resnet.py} & \texttt{train.csv}, \texttt{val.csv} & \texttt{models/resnet18\_main.pth} \\
+\texttt{evaluate\_baseline} & \texttt{src/evaluation/evaluate.py} & \texttt{svm\_baseline.joblib}, \texttt{test.csv} & \texttt{baseline\_metrics.json}, \texttt{baseline\_confusion\_matrix.png} \\
+\texttt{evaluate\_main} & \texttt{src/evaluation/evaluate.py} & \texttt{resnet18\_main.pth}, \texttt{test.csv} & \texttt{main\_metrics.json}, \texttt{main\_confusion\_matrix.png} \\
+\texttt{register\_model} & \texttt{src/tracking/register\_model.py} & \texttt{resnet18\_main.pth}, \texttt{main\_metrics.json} & MLflow Registered Model (\texttt{Staging} / \texttt{@staging}) \\
+\bottomrule
+\end{tabular}
+\caption{Summary of named DVC pipeline stages, dependencies, and tracked outputs.}
+\end{table}
+
+\subsection{Remote MLflow Tracking and Model Registry (\texttt{src/tracking/})}
+All training and evaluation runs log hyperparameters, per-epoch training/validation curves, test metrics, checkpoints, and confusion matrices directly to the hosted DagsHub MLflow server (\texttt{CampusNav-Indoor-Localization} experiment).
+
+The final stage (\texttt{src/tracking/register\_model.py}) gates model registration behind configurable parameters in \texttt{params.yaml} (\texttt{register\_model} flag and \texttt{min\_f1\_to\_register: 0.70} threshold) so routine local debugging runs do not clutter the registry. When criteria are met, \texttt{assign\_stage\_or\_alias()} in \texttt{src/tracking/mlflow\_utils.py} registers \texttt{CampusNav-ResNet18} and transitions the version to \texttt{Staging} while simultaneously setting the modern MLflow alias (\texttt{@staging}) and version tag (\texttt{stage=Staging}) for full compatibility across MLflow 2.x and 3.x interfaces.
+
+\end{document}
